@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ahmed Express</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js"></script>
+<style>
+body{margin:0;background:#F3FAF4;color:#17251C;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+input,select,textarea{color:#17251C!important;background:#fff!important}
+@keyframes lg{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:none}}.lg{animation:lg .9s ease both}
+@keyframes up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}.up{animation:up .3s ease both}
+.chips::-webkit-scrollbar{display:none}
+</style></head><body><div id="root"></div>
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getFirestore,collection,doc,onSnapshot,addDoc,updateDoc,deleteDoc,setDoc} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getAuth,signInWithEmailAndPassword,onAuthStateChanged,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getStorage,ref,uploadBytes,getDownloadURL} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+/* ===== PASTE YOUR OWN FIREBASE CONFIG (see README.md) ===== */
+const firebaseConfig={apiKey:"YOUR_API_KEY",authDomain:"YOUR_PROJECT.firebaseapp.com",projectId:"YOUR_PROJECT_ID",storageBucket:"YOUR_PROJECT.appspot.com",messagingSenderId:"YOUR_ID",appId:"YOUR_APP_ID"};
+const OK=!firebaseConfig.projectId.startsWith("YOUR");
+let db,auth,st;if(OK){const a=initializeApp(firebaseConfig);db=getFirestore(a);auth=getAuth(a);st=getStorage(a)}
+const {useState,useEffect,useMemo,useRef}=React;const html=htm.bind(React.createElement);
+const DEFCATS=["Beverages","Grocery","Vegetables","Dairy Products","Snacks & Biscuits","Household Essentials","Personal Care","Other Products"];
+const rs=n=>"Rs. "+Number(n).toLocaleString("en-US");
+const eff=p=>{const o=+p.offerPrice;const live=o>0&&o<+p.price&&(!p.offerEnd||new Date(p.offerEnd+"T23:59:59")>new Date());return live?o:+p.price};
+const stock=p=>+(p.quantity??0);
+const lsGet=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+const cls="w-full border border-green-200 rounded-xl px-3 py-2.5 mb-3 outline-none focus:ring-2 ring-[#128C4A]";
+const Btn=({c="bg-[#128C4A] text-white",...p})=>html`<button ...${p} className=${"rounded-xl font-bold px-4 py-2.5 active:scale-95 transition disabled:opacity-40 "+c+" "+(p.className||"")}/>`;
+const In=({l,...p})=>html`<label className="block text-xs text-gray-600">${l}<input ...${p} className=${cls}/></label>`;
+const Img=({p,c})=>p.image?html`<img src=${p.image} alt=${p.name} loading="lazy" className=${"object-cover "+c}/>`:html`<div className=${"flex items-center justify-center bg-[#F3FAF4] text-4xl "+c}>🛒</div>`;
+const resize=f=>new Promise(r=>{const im=new Image();im.onload=()=>{const s=Math.min(1,800/Math.max(im.width,im.height)),c=document.createElement("canvas");c.width=im.width*s;c.height=im.height*s;c.getContext("2d").drawImage(im,0,0,c.width,c.height);c.toBlob(r,"image/jpeg",.8)};im.src=URL.createObjectURL(f)});
+const waNum=v=>{let n=String(v||"").replace(/\D/g,"");if(n.startsWith("00"))n=n.slice(2);if(n.startsWith("0"))n="92"+n.slice(1);return n};
+
+function Header({go,count,admin}){return html`<header className="sticky top-0 z-30 bg-white shadow flex items-center justify-between px-3 py-2">
+<button onClick=${()=>go("welcome")} aria-label="Home"><img src="logo.jpg" alt="Ahmed Express" className="h-12"/></button>
+<button onClick=${()=>go("cart")} aria-label="Cart" className="relative text-2xl px-2">🛒${count>0&&html`<span className="absolute -top-1 -right-1 bg-[#65B51D] text-white text-xs font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center">${count}</span>`}</button></header>`}
+
+function Welcome({go}){return html`<div className="min-h-screen flex flex-col items-center justify-center p-6 bg-white text-center">
+<img src="logo.jpg" alt="Ahmed Express - All in One General Store" className="lg w-full max-w-md"/>
+<p className="text-[#075E36] font-semibold mt-2">All in One General Store</p>
+<${Btn} onClick=${()=>go("shop")} className="mt-8 w-full max-w-xs !py-3.5 text-lg shadow-lg">Get Started<//>
+<button onClick=${()=>go("adminLogin")} className="mt-4 text-sm text-gray-500 underline">Admin Login</button></div>`}
+
+function Shop({products,cats,settings,cart,addItem,go}){
+const [q,setQ]=useState(""),[cat,setCat]=useState("All"),[sort,setSort]=useState("new"),[maxP,setMaxP]=useState("");
+const list=useMemo(()=>{let l=products.filter(p=>!p.hidden&&p.name?.toLowerCase().includes(q.toLowerCase())&&(cat==="All"||p.category===cat)&&(!maxP||eff(p)<=+maxP));
+const f={low:(a,b)=>eff(a)-eff(b),high:(a,b)=>eff(b)-eff(a),name:(a,b)=>a.name.localeCompare(b.name),new:(a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)}[sort];return [...l].sort(f)},[products,q,cat,sort,maxP]);
+const deals=products.filter(p=>!p.hidden&&eff(p)<+p.price&&stock(p)>0);
+const inCart=id=>cart.items.find(i=>i.id===id)?.qty||0;
+const Card=p=>{const e=eff(p),off=e<+p.price,out=stock(p)<=0,max=inCart(p.id)>=stock(p);return html`<div key=${p.id} className="up bg-white rounded-2xl shadow overflow-hidden flex flex-col">
+<div className="relative"><${Img} p=${p} c=${"w-full h-32 "+(out?"opacity-40":"")}/>${off&&html`<span className="absolute top-2 left-2 bg-[#65B51D] text-white text-[11px] font-bold px-2 py-0.5 rounded-full">-${Math.round(100-e/p.price*100)}%</span>`}${out&&html`<span className="absolute top-2 right-2 bg-red-600 text-white text-[11px] px-2 py-0.5 rounded-full">Out of stock</span>`}</div>
+<div className="p-3 flex flex-col flex-1"><p className="font-semibold text-sm leading-tight">${p.name}</p><p className="text-xs text-gray-500">${[p.brand,p.size].filter(Boolean).join(" • ")}</p>
+<p className="mt-1 font-extrabold text-[#075E36]">${rs(e)} ${off&&html`<s className="text-xs font-normal text-gray-400">${rs(p.price)}</s>`}</p>
+<${Btn} disabled=${out||max} onClick=${()=>addItem(p)} className="mt-2 !py-2 text-sm">${out?"Out of stock":max?"Max in cart":"Add to Cart"}<//></div></div>`};
+return html`<div className="max-w-5xl mx-auto pb-24">
+${settings.announcement&&html`<div className="bg-[#075E36] text-white text-center text-sm py-2 px-3">${settings.announcement}</div>`}
+<div className="p-3"><input value=${q} onChange=${e=>setQ(e.target.value)} placeholder="Search products..." aria-label="Search" className=${cls}/>
+<div className="chips flex gap-2 overflow-x-auto pb-2">${["All",...cats].map(c=>html`<button key=${c} onClick=${()=>setCat(c)} className=${"shrink-0 px-4 py-1.5 rounded-full text-sm font-semibold "+(cat===c?"bg-[#128C4A] text-white":"bg-white border border-green-200 text-[#075E36]")}>${c}</button>`)}</div>
+<div className="flex gap-2 mt-1"><select value=${sort} onChange=${e=>setSort(e.target.value)} aria-label="Sort" className=${cls+" !mb-0"}><option value="new">Newest</option><option value="low">Price: Low-High</option><option value="high">Price: High-Low</option><option value="name">Name</option></select>
+<input type="number" value=${maxP} onChange=${e=>setMaxP(e.target.value)} placeholder="Max price" aria-label="Max price" className=${cls+" !mb-0"}/>
+${(q||cat!=="All"||maxP)&&html`<${Btn} c="bg-gray-200" onClick=${()=>{setQ("");setCat("All");setMaxP("")}}>Clear<//>`}</div></div>
+${deals.length>0&&cat==="All"&&!q&&html`<h2 className="px-3 font-bold text-[#075E36]">Today's Offers</h2><div className="chips flex gap-3 overflow-x-auto p-3">${deals.map(p=>html`<div key=${p.id} className="w-40 shrink-0">${Card(p)}</div>`)}</div>`}
+<h2 className="px-3 font-bold text-[#075E36]">${cat==="All"?"All Products":cat}</h2>
+<div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3">${list.map(Card)}</div>
+${!list.length&&html`<p className="text-center text-gray-500 py-10">${products.length?"No products match. Try clearing filters.":"Products will appear here soon."}</p>`}
+<div className="text-center"><${Btn} c="bg-white border border-[#128C4A] text-[#075E36]" onClick=${()=>go("cart")}>Can't find something? Request a Product<//></div></div>`}
+
+function Cart({cart,setCart,products,go}){
+const [c,setC]=useState({name:"",qty:1,size:"",brand:"",notes:""});
+const lines=cart.items.map(i=>({i,p:products.find(p=>p.id===i.id)})).filter(l=>l.p);
+const upd=(id,d)=>setCart(s=>({...s,items:s.items.map(x=>x.id===id?{...x,qty:Math.max(0,Math.min(x.qty+d,stock(products.find(p=>p.id===id)||{quantity:0})))}:x).filter(x=>x.qty>0)}));
+const sub=lines.reduce((s,{i,p})=>s+i.qty*eff(p),0);
+const changed=lines.filter(({i,p})=>i.price!=null&&i.price!==eff(p));
+const addC=()=>{if(!c.name.trim())return;setCart(s=>({...s,custom:[...s.custom,{...c,name:c.name.trim(),qty:Math.max(1,+c.qty||1)}]}));setC({name:"",qty:1,size:"",brand:"",notes:""})};
+const empty=!lines.length&&!cart.custom.length;
+return html`<div className="max-w-xl mx-auto p-3 pb-10"><h2 className="font-bold text-xl text-[#075E36] mb-3">My Cart</h2>
+${empty&&html`<p className="text-center text-gray-500 py-8">Your cart is empty.</p>`}
+${changed.length>0&&html`<p className="bg-yellow-50 text-yellow-800 text-sm rounded-xl p-2 mb-2">Price changed for: ${changed.map(l=>l.p.name).join(", ")}. Totals use current prices.</p>`}
+${lines.map(({i,p})=>html`<div key=${p.id} className="bg-white rounded-2xl shadow p-3 mb-2 flex gap-3 items-center"><${Img} p=${p} c="w-16 h-16 rounded-xl"/>
+<div className="flex-1"><p className="font-semibold text-sm">${p.name}</p><p className="text-xs text-gray-500">${rs(eff(p))} each</p>
+<div className="flex items-center gap-3 mt-1"><button aria-label="Decrease" onClick=${()=>upd(p.id,-1)} className="w-8 h-8 rounded-full bg-green-100 font-bold">−</button><b>${i.qty}</b><button aria-label="Increase" disabled=${i.qty>=stock(p)} onClick=${()=>upd(p.id,1)} className="w-8 h-8 rounded-full bg-[#128C4A] text-white font-bold disabled:opacity-40">+</button></div></div>
+<div className="text-right"><b>${rs(i.qty*eff(p))}</b><br/><button onClick=${()=>upd(p.id,-999)} className="text-red-600 text-xs">Remove</button></div></div>`)}
+${cart.custom.map((x,k)=>html`<div key=${k} className="bg-white rounded-2xl shadow p-3 mb-2 flex justify-between"><div><p className="font-semibold text-sm">${x.name} × ${x.qty}</p><p className="text-xs text-gray-500">${[x.size,x.brand,x.notes].filter(Boolean).join(" • ")}</p><p className="text-xs text-orange-600">Price to Be Confirmed</p></div><button onClick=${()=>setCart(s=>({...s,custom:s.custom.filter((_,j)=>j!==k)}))} className="text-red-600 text-xs">Remove</button></div>`)}
+<div className="bg-white rounded-2xl shadow p-3 my-3"><h3 className="font-bold text-sm mb-2">Request a Product (not in catalogue)</h3>
+<${In} l="Product name" value=${c.name} onChange=${e=>setC({...c,name:e.target.value})}/><div className="grid grid-cols-3 gap-2"><${In} l="Qty" type="number" min="1" value=${c.qty} onChange=${e=>setC({...c,qty:e.target.value})}/><${In} l="Size/pack" value=${c.size} onChange=${e=>setC({...c,size:e.target.value})}/><${In} l="Brand" value=${c.brand} onChange=${e=>setC({...c,brand:e.target.value})}/></div>
+<${In} l="Notes" value=${c.notes} onChange=${e=>setC({...c,notes:e.target.value})}/><${Btn} onClick=${addC} disabled=${!c.name.trim()}>Add Request<//></div>
+<div className="flex justify-between font-extrabold text-lg text-[#075E36] py-2"><span>Catalogue Subtotal</span><span>${rs(sub)}</span></div>
+<div className="flex gap-2"><${Btn} c="bg-white border border-[#128C4A] text-[#075E36]" onClick=${()=>go("shop")}>Continue Shopping<//><${Btn} disabled=${empty} onClick=${()=>go("checkout")} className="flex-1">Checkout<//></div></div>`}
+
+function Checkout({cart,setCart,products,settings,go}){
+const [f,setF]=useState(()=>lsGet("ae_cust",{name:"",phone:"",address:"",area:"",notes:""}));
+const [err,setErr]=useState(""),[busy,setBusy]=useState(false),[ref]=useState(()=>"AE-"+new Date().toISOString().slice(2,10).replace(/-/g,"")+"-"+Math.random().toString(36).slice(2,6).toUpperCase());
+const [sent,setSent]=useState(false);
+const lines=cart.items.map(i=>({i,p:products.find(p=>p.id===i.id)})).filter(l=>l.p);
+const sub=lines.reduce((s,{i,p})=>s+i.qty*eff(p),0);
+const disc=lines.reduce((s,{i,p})=>s+i.qty*(+p.price-eff(p)),0);
+const fee=settings.deliveryFee===""||settings.deliveryFee==null?null:+settings.deliveryFee;
+const pending=cart.custom.length>0||fee===null;
+const set=(k,v)=>setF(s=>({...s,[k]:v}));
+const go2=async()=>{
+ if(busy)return;
+ if(!f.name.trim()||!f.address.trim()||!f.area.trim())return setErr("Please fill name, address and area.");
+ const n=waNum(f.phone);if(n.length<11||n.length>15)return setErr("Enter a valid phone number, e.g. 03XX XXXXXXX.");
+ const dest=waNum(settings.whatsapp);if(!dest)return setErr("Store WhatsApp number is not configured yet. Please contact the store.");
+ if(lines.some(({i,p})=>i.qty>stock(p)))return setErr("Some items exceed available stock. Please update your cart.");
+ setErr("");setBusy(true);lsSet("ae_cust",f);
+ const items=lines.map(({i,p})=>({id:p.id,name:p.name,qty:i.qty,unit:eff(p),line:i.qty*eff(p)}));
+ let saved=true;
+ try{await setDoc(doc(db,"orders",ref),{ref,name:f.name.trim(),phone:n,address:f.address.trim(),area:f.area.trim(),notes:f.notes.trim(),items,custom:cart.custom,subtotal:sub,discount:disc,deliveryFee:fee,provisional:pending,status:"Pending WhatsApp Confirmation",createdAt:new Date()})}catch(e){saved=false}
+ setBusy(false);
+ if(!saved&&!confirm("Order could not be saved online. Open WhatsApp anyway? (Cancel to retry)"))return;
+ const L=["*AHMED EXPRESS*",pending?"*PROVISIONAL ORDER / PROFORMA INVOICE*":"*CUSTOMER ORDER / PROFORMA INVOICE*","Ref: "+ref,"Date: "+new Date().toLocaleString("en-GB"),"","Name: "+f.name.trim(),"Phone: "+n,"Address: "+f.address.trim(),"Area: "+f.area.trim(),"","*Items*",...items.map((x,k)=>`${k+1}. ${x.name} — ${x.qty} x ${rs(x.unit)} = ${rs(x.line)}`)];
+ if(cart.custom.length)L.push("","*Custom Requests (Price to Be Confirmed)*",...cart.custom.map((x,k)=>`${k+1}. ${x.name} — Qty ${x.qty}${[x.size,x.brand,x.notes].filter(Boolean).map(s=>" | "+s).join("")}`));
+ L.push("","Catalogue Subtotal: "+rs(sub));if(disc>0)L.push("Discount applied: "+rs(disc));
+ L.push("Delivery Fee: "+(fee===null?"To be confirmed":rs(fee)),(pending?"Known Total (excl. pending items/charges): ":"Total: ")+rs(sub+(fee||0)));
+ if(pending)L.push("Final total pending confirmation.");if(f.notes.trim())L.push("","Notes: "+f.notes.trim());L.push("","Thank you for shopping with Ahmed Express!");
+ window.open("https://wa.me/"+dest+"?text="+encodeURIComponent(L.join("\n")),"_blank");setSent(true);
+};
+if(sent)return html`<div className="max-w-md mx-auto p-6 text-center"><p className="text-4xl">📲</p><h2 className="font-bold text-[#075E36] mt-2">WhatsApp opened</h2><p className="text-sm text-gray-600 mt-2">Your order is NOT confirmed until you press Send in WhatsApp and the store replies. Reference: <b>${ref}</b></p>
+<${Btn} className="mt-4" onClick=${()=>{setCart({items:[],custom:[]});go("shop")}}>Done – Clear Cart<//> <${Btn} c="bg-gray-200" onClick=${()=>setSent(false)}>Back<//></div>`;
+return html`<div className="max-w-xl mx-auto p-3 pb-10"><h2 className="font-bold text-xl text-[#075E36] mb-3">Delivery Details</h2>
+<${In} l="Full name *" value=${f.name} onChange=${e=>set("name",e.target.value)}/><${In} l="WhatsApp / contact number *" type="tel" value=${f.phone} onChange=${e=>set("phone",e.target.value)}/>
+<${In} l="Delivery address *" value=${f.address} onChange=${e=>set("address",e.target.value)}/><${In} l="Area / neighbourhood *" value=${f.area} onChange=${e=>set("area",e.target.value)}/><${In} l="Delivery instructions (optional)" value=${f.notes} onChange=${e=>set("notes",e.target.value)}/>
+<div className="bg-white rounded-2xl shadow p-3 text-sm mb-3"><b>Review</b>${lines.map(({i,p})=>html`<div key=${p.id} className="flex justify-between"><span>${p.name} × ${i.qty}</span><span>${rs(i.qty*eff(p))}</span></div>`)}${cart.custom.map((x,k)=>html`<div key=${k} className="flex justify-between"><span>${x.name} × ${x.qty}</span><span className="text-orange-600">Price to Be Confirmed</span></div>`)}
+<hr className="my-2"/><div className="flex justify-between"><span>Subtotal</span><b>${rs(sub)}</b></div>${disc>0&&html`<div className="flex justify-between"><span>Discount (included)</span><span>${rs(disc)}</span></div>`}<div className="flex justify-between"><span>Delivery fee</span><span>${fee===null?"Needs confirmation":rs(fee)}</span></div>
+<div className="flex justify-between font-bold text-[#075E36]"><span>${pending?"Known total (provisional)":"Total"}</span><span>${rs(sub+(fee||0))}</span></div></div>
+${err&&html`<p className="text-red-600 text-sm mb-2">${err}</p>`}
+<${Btn} disabled=${busy} onClick=${go2} className="w-full !py-3.5">${busy?"Saving order...":"Proceed to WhatsApp"}<//></div>`}
+
+function AdminLogin({go}){
+const [e,setE]=useState(""),[p,setP]=useState(""),[err,setErr]=useState(""),[b,setB]=useState(false);
+const login=async()=>{setB(true);setErr("");try{await signInWithEmailAndPassword(auth,e.trim(),p);go("admin")}catch(x){setErr("Login failed. Check email/password.")}setB(false)};
+return html`<div className="min-h-screen flex items-center justify-center p-5"><div className="bg-white rounded-3xl shadow-xl p-6 w-full max-w-sm"><img src="logo.jpg" alt="Ahmed Express" className="mb-3"/><h2 className="font-bold text-[#075E36] mb-3">Admin Login</h2>
+<${In} l="Email" type="email" value=${e} onChange=${x=>setE(x.target.value)}/><${In} l="Password" type="password" value=${p} onChange=${x=>setP(x.target.value)}/>${err&&html`<p className="text-red-600 text-sm mb-2">${err}</p>`}
+<${Btn} onClick=${login} disabled=${b||!e||!p} className="w-full">${b?"Please wait...":"Login"}<//><button onClick=${()=>go("welcome")} className="mt-3 text-sm text-gray-500 underline">Back</button></div></div>`}
+
+function Admin({products,cats,settings,go}){
+const [tab,setTab]=useState("products"),[form,setForm]=useState(null),[orders,setOrders]=useState([]),[nc,setNc]=useState(""),[S,setS]=useState({whatsapp:"",deliveryFee:"",announcement:"",...settings}),[msg,setMsg]=useState(""),[cdocs,setCdocs]=useState([]);
+useEffect(()=>onSnapshot(collection(db,"orders"),s=>setOrders(s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0))),()=>{}),[]);
+useEffect(()=>onSnapshot(collection(db,"categories"),s=>setCdocs(s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.order||0)-(b.order||0)))),[]);
+const run=async f=>{try{await f();setMsg("Saved ✔")}catch(e){setMsg("Error: "+e.message)}};
+const saveP=async d=>{const o={name:d.name.trim(),brand:d.brand||"",size:d.size||"",category:d.category,price:+d.price,offerPrice:d.offerPrice===""?0:+d.offerPrice,offerEnd:d.offerEnd||"",quantity:+d.quantity,image:d.image||"",hidden:!!d.hidden};
+ if(!o.name||!(o.price>=0)||!(o.quantity>=0)||(o.offerPrice&&o.offerPrice>=o.price))return setMsg("Check name, price, quantity; offer price must be below price.");
+ await run(async()=>{if(d.file){const b=await resize(d.file),r=ref(st,"products/"+Date.now()+".jpg");await uploadBytes(r,b);o.image=await getDownloadURL(r)}
+ if(d.id)await updateDoc(doc(db,"products",d.id),o);else await addDoc(collection(db,"products"),{...o,createdAt:new Date()});setForm(null)})};
+const tabs=[["products","Products"],["categories","Categories"],["orders","Orders"],["settings","Settings"]];
+const P=form;const sp=(k,v)=>setForm(s=>({...s,[k]:v}));
+const active=products.filter(p=>!p.hidden).length,low=products.filter(p=>stock(p)<=5).length;
+return html`<div className="max-w-4xl mx-auto pb-10"><header className="bg-[#075E36] text-white p-3 flex justify-between items-center sticky top-0 z-30"><b>Ahmed Express Admin</b><div><button className="mr-3 text-sm underline" onClick=${()=>go("shop")}>View Store</button><button className="text-sm underline" onClick=${async()=>{await signOut(auth);go("welcome")}}>Logout</button></div></header>
+<div className="flex gap-2 p-3 overflow-x-auto chips">${tabs.map(([k,l])=>html`<button key=${k} onClick=${()=>{setTab(k);setMsg("")}} className=${"px-4 py-2 rounded-xl font-semibold shrink-0 "+(tab===k?"bg-[#128C4A] text-white":"bg-white")}>${l}</button>`)}</div>
+<div className="px-3">${msg&&html`<p className="text-sm mb-2 text-[#075E36]">${msg}</p>`}
+${tab==="products"&&html`<div className="grid grid-cols-3 gap-2 mb-3 text-center text-xs">${[["Active products",active],["Low / out of stock",low],["Orders saved",orders.length]].map(([a,b])=>html`<div key=${a} className="bg-white rounded-xl p-2 shadow"><b className="text-xl text-[#075E36]">${b}</b><br/>${a}</div>`)}</div>
+<${Btn} onClick=${()=>setForm({name:"",brand:"",size:"",category:(cats[0]||""),price:"",offerPrice:"",offerEnd:"",quantity:"",image:"",hidden:false})} className="w-full mb-3">+ Add Product<//>
+${products.map(p=>html`<div key=${p.id} className="bg-white rounded-2xl shadow p-3 mb-2 flex gap-3 items-center"><${Img} p=${p} c="w-14 h-14 rounded-xl"/><div className="flex-1 min-w-0"><p className="font-semibold text-sm truncate">${p.name}${p.hidden?" (hidden)":""}</p><p className="text-xs text-gray-500">${p.category} • ${rs(eff(p))} • Stock ${stock(p)}</p></div>
+<button onClick=${()=>setForm({...p,offerPrice:p.offerPrice||""})} className="text-blue-600 text-sm">Edit</button><button onClick=${()=>confirm("Delete "+p.name+"?")&&run(()=>deleteDoc(doc(db,"products",p.id)))} className="text-red-600 text-sm">Delete</button></div>`)}`}
+${tab==="categories"&&html`<div className="flex gap-2"><input value=${nc} onChange=${e=>setNc(e.target.value)} placeholder="New category" className=${cls}/><${Btn} disabled=${!nc.trim()} onClick=${()=>run(async()=>{await addDoc(collection(db,"categories"),{name:nc.trim(),order:cdocs.length});setNc("")})}>Add<//></div>
+${!cdocs.length&&html`<${Btn} c="bg-green-100 text-[#075E36]" className="mb-3" onClick=${()=>run(async()=>{for(const [i,n] of DEFCATS.entries())await addDoc(collection(db,"categories"),{name:n,order:i})})}>Load suggested categories<//>`}
+${cdocs.map((c,i)=>html`<div key=${c.id} className="bg-white rounded-xl p-3 mb-2 flex justify-between items-center"><span>${c.name}</span><span><button disabled=${i===0} onClick=${()=>run(async()=>{await updateDoc(doc(db,"categories",c.id),{order:i-1});await updateDoc(doc(db,"categories",cdocs[i-1].id),{order:i})})} className="px-2" aria-label="Up">↑</button><button disabled=${i===cdocs.length-1} onClick=${()=>run(async()=>{await updateDoc(doc(db,"categories",c.id),{order:i+1});await updateDoc(doc(db,"categories",cdocs[i+1].id),{order:i})})} className="px-2" aria-label="Down">↓</button><button onClick=${()=>confirm("Delete "+c.name+"?")&&run(()=>deleteDoc(doc(db,"categories",c.id)))} className="text-red-600 px-2">Delete</button></span></div>`)}`}
+${tab==="orders"&&html`${!orders.length&&html`<p className="text-gray-500">No saved orders yet.</p>`}${orders.map(o=>html`<div key=${o.id} className="bg-white rounded-2xl shadow p-3 mb-2 text-sm"><div className="flex justify-between"><b>${o.ref}</b><span className="text-xs">${o.createdAt?.toDate?.().toLocaleString("en-GB")||""}</span></div>
+<p>${o.name} • ${o.phone}</p><p className="text-xs text-gray-600">${o.address}, ${o.area}</p>${(o.items||[]).map((x,k)=>html`<p key=${k}>${x.name} × ${x.qty} = ${rs(x.line)}</p>`)}${(o.custom||[]).map((x,k)=>html`<p key=${k} className="text-orange-600">${x.name} × ${x.qty} — Price to Be Confirmed</p>`)}
+<p className="font-bold">Subtotal ${rs(o.subtotal)} ${o.provisional?"(provisional)":""}</p><select value=${o.status} onChange=${e=>run(()=>updateDoc(doc(db,"orders",o.id),{status:e.target.value}))} className=${cls+" mt-2"}>${["Pending WhatsApp Confirmation","Price Confirmation Required","Confirmed","Preparing","Out for Delivery","Delivered","Cancelled"].map(s=>html`<option key=${s}>${s}</option>`)}</select></div>`)}`}
+${tab==="settings"&&html`<${In} l="WhatsApp Business number (e.g. 923XXXXXXXXX)" value=${S.whatsapp||S.phone||""} onChange=${e=>setS({...S,whatsapp:e.target.value})}/><${In} l="Delivery fee (Rs) — leave empty if not decided" type="number" value=${S.deliveryFee??""} onChange=${e=>setS({...S,deliveryFee:e.target.value})}/><${In} l="Homepage announcement" value=${S.announcement||""} onChange=${e=>setS({...S,announcement:e.target.value})}/>
+<${Btn} onClick=${()=>run(()=>setDoc(doc(db,"settings","main"),{whatsapp:S.whatsapp||S.phone||"",deliveryFee:S.deliveryFee===""?null:+S.deliveryFee,announcement:S.announcement||""},{merge:true}))}>Save Settings<//>`}</div>
+${P&&html`<div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center"><div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 max-h-[92vh] overflow-y-auto"><h3 className="font-bold text-[#075E36] mb-3">${P.id?"Edit":"Add"} Product</h3>
+<${In} l="Name *" value=${P.name} onChange=${e=>sp("name",e.target.value)}/><div className="grid grid-cols-2 gap-2"><${In} l="Brand" value=${P.brand||""} onChange=${e=>sp("brand",e.target.value)}/><${In} l="Size / pack" value=${P.size||""} onChange=${e=>sp("size",e.target.value)}/>
+<${In} l="Price (Rs) *" type="number" min="0" value=${P.price} onChange=${e=>sp("price",e.target.value)}/><${In} l="Offer price" type="number" min="0" value=${P.offerPrice} onChange=${e=>sp("offerPrice",e.target.value)}/><${In} l="Offer ends" type="date" value=${P.offerEnd||""} onChange=${e=>sp("offerEnd",e.target.value)}/><${In} l="Stock *" type="number" min="0" value=${P.quantity} onChange=${e=>sp("quantity",e.target.value)}/></div>
+<label className="text-xs text-gray-600">Category<select value=${P.category} onChange=${e=>sp("category",e.target.value)} className=${cls}>${[...new Set([...cats,P.category].filter(Boolean))].map(c=>html`<option key=${c}>${c}</option>`)}</select></label>
+<label className="text-xs text-gray-600">Image<input type="file" accept="image/*" onChange=${e=>sp("file",e.target.files[0])} className="block mb-2"/></label>${P.image&&html`<img src=${P.image} className="w-16 h-16 object-cover rounded-xl mb-2"/>`}${P.image&&html`<button className="text-red-600 text-xs mb-2" onClick=${()=>setForm(s=>({...s,image:"",file:null}))}>Remove image</button>`}
+<label className="flex gap-2 items-center text-sm mb-3"><input type="checkbox" checked=${!!P.hidden} onChange=${e=>sp("hidden",e.target.checked)}/> Hide from catalogue</label>
+<div className="flex gap-2"><${Btn} c="bg-gray-200" onClick=${()=>setForm(null)} className="flex-1">Cancel<//><${Btn} onClick=${()=>saveP(P)} className="flex-1">Save<//></div></div></div>`}</div>`}
+
+function App(){
+const [view,setView]=useState("welcome"),[user,setUser]=useState(null),[ready,setReady]=useState(false);
+const [products,setProducts]=useState(null),[cdocs,setCd]=useState([]),[settings,setSettings]=useState({}),[err,setErr]=useState("");
+const [cart,setCartS]=useState(()=>lsGet("ae_cart",{items:[],custom:[]}));
+const setCart=f=>setCartS(s=>{const n=typeof f==="function"?f(s):f;lsSet("ae_cart",n);return n});
+useEffect(()=>{if(!OK)return;const u=[onSnapshot(collection(db,"products"),s=>setProducts(s.docs.map(d=>({id:d.id,...d.data()}))),e=>setErr(e.message)),
+onSnapshot(collection(db,"categories"),s=>setCd(s.docs.map(d=>({id:d.id,...d.data()})).filter(c=>!c.hidden).sort((a,b)=>(a.order||0)-(b.order||0)).map(c=>c.name))),
+onSnapshot(doc(db,"settings","main"),d=>setSettings(d.data()||{}),()=>{}),onAuthStateChanged(auth,x=>{setUser(x);setReady(true)})];return()=>u.forEach(f=>f())},[]);
+const go=v=>{window.scrollTo(0,0);setView(v==="admin"&&!user?"adminLogin":v)};
+if(!OK)return html`<div className="p-8 text-center"><img src="logo.jpg" className="mx-auto max-w-xs"/><p className="font-bold text-[#075E36] mt-4">Firebase config required</p><p className="text-sm text-gray-600">Paste your firebaseConfig at the top of index.html (see README.md).</p></div>`;
+if(err)return html`<p className="p-6 text-red-600 text-center">Cannot load store: ${err}</p>`;
+const cats=cdocs.length?cdocs:[...new Set([...DEFCATS.filter(()=>!products?.length),...(products||[]).map(p=>p.category).filter(Boolean)])];
+const count=cart.items.reduce((s,i)=>s+i.qty,0)+cart.custom.reduce((s,i)=>s+i.qty,0);
+const addItem=p=>setCart(s=>{const x=s.items.find(i=>i.id===p.id);if((x?.qty||0)>=stock(p))return s;return {...s,items:x?s.items.map(i=>i.id===p.id?{...i,qty:i.qty+1,price:eff(p)}:i):[...s.items,{id:p.id,qty:1,price:eff(p)}]}});
+if(view==="welcome")return html`<${Welcome} go=${go}/>`;
+if(view==="adminLogin")return user?html`<${Admin} products=${products||[]} cats=${cats} settings=${settings} go=${go}/>`:ready?html`<${AdminLogin} go=${go}/>`:html`<p className="p-8 text-center">Loading...</p>`;
+if(view==="admin")return html`<${Admin} products=${products||[]} cats=${cats} settings=${settings} go=${go}/>`;
+return html`<div><${Header} go=${go} count=${count}/>${products===null?html`<div className="grid grid-cols-2 gap-3 p-4">${[1,2,3,4].map(i=>html`<div key=${i} className="h-48 bg-white rounded-2xl animate-pulse"/>`)}</div>`
+:view==="shop"?html`<${Shop} products=${products} cats=${cats} settings=${settings} cart=${cart} addItem=${addItem} go=${go}/>`
+:view==="cart"?html`<${Cart} cart=${cart} setCart=${setCart} products=${products} go=${go}/>`
+:html`<${Checkout} cart=${cart} setCart=${setCart} products=${products} settings=${settings} go=${go}/>`}</div>`}
+ReactDOM.createRoot(document.getElementById("root")).render(html`<${App}/>`);
+</script></body></html>
